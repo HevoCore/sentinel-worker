@@ -25,15 +25,12 @@ class Granicus:
         self.scraper = HtmlScraper()
 
     def parse_datetime(self, datetime_str, fuzzy=True):
-        try:
-            # Parse the datetime string with fuzzy logic if enabled
-            dt = parse(datetime_str, fuzzy=fuzzy)
-            # Convert to naive datetime (no timezone info)
-            naive_dt = dt.replace(tzinfo=None)
-            return naive_dt
-        except Exception as e:
-            print(f"Error parsing datetime string: {datetime_str}, error: {e}")
-            return None
+        # Parse the datetime string with fuzzy logic if enabled.
+        # Let parsing exceptions propagate so callers can handle them explicitly.
+        dt = parse(datetime_str, fuzzy=fuzzy)
+        # Convert to naive datetime (no timezone info) and return.
+        naive_dt = dt.replace(tzinfo=None)
+        return naive_dt
 
     def parse_and_localize_datetime(self, datetime_str, timezone):
         dt = parse(datetime_str, fuzzy=True)

@@ -102,6 +102,7 @@ class ScheduleScrapeService:
         mode_used = "dedicated"
         youtube_used = False
         youtube_channel_url: Optional[str] = None
+        yt_meta: dict[str, Any] = {}
 
         if request.youtube_fallback:
             raw_meetings, yt_meta = await self._apply_youtube_fallback(
@@ -132,6 +133,7 @@ class ScheduleScrapeService:
                 youtube_used=youtube_used,
                 youtube_channel_url=youtube_channel_url,
                 warnings=warnings,
+                **self._scrape_meta_youtube_fields(yt_meta),
             ),
         )
 
@@ -201,6 +203,7 @@ class ScheduleScrapeService:
         mode_used = "llm"
         youtube_used = False
         youtube_channel_url: Optional[str] = None
+        yt_meta: dict[str, Any] = {}
 
         if request.youtube_fallback:
             raw_meetings, yt_meta = await self._apply_youtube_fallback(
@@ -238,6 +241,7 @@ class ScheduleScrapeService:
                 youtube_used=youtube_used,
                 youtube_channel_url=youtube_channel_url,
                 warnings=warnings,
+                **self._scrape_meta_youtube_fields(yt_meta),
             ),
             page_markdown=(
                 cleaned.markdown
@@ -280,14 +284,54 @@ class ScheduleScrapeService:
             return meetings, {
                 "youtube_used": False,
                 "channel_url": channel_url,
+                "youtube_error": str(exc),
+                "live_count": 0,
+                "upcoming_count": 0,
+                "concluded_count": 0,
+                "fetch_ok": False,
+                "fetch_error": str(exc),
             }
 
         for note in merged.get("notes") or []:
             warnings.append(note)
 
+        fetch_ok = merged.get("fetch_ok")
+        fetch_error = merged.get("fetch_error")
+        live_count = merged.get("live_count")
+        if fetch_ok is False:
+            error = fetch_error or "YouTube overlay fetch failed"
+            warnings.append(error)
+            log.error("YouTube overlay fetch failed for %s: %s", channel_url, error)
+        elif live_count == 0:
+            log.warning(
+                "YouTube overlay classified live=0 for %s upcoming=%s concluded=%s",
+                channel_url,
+                merged.get("upcoming_count"),
+                merged.get("concluded_count"),
+            )
+
         return merged["meetings"], {
             "youtube_used": merged.get("youtube_used", False),
             "channel_url": channel_url,
+            "youtube_error": fetch_error if fetch_ok is False else None,
+            "live_count": live_count,
+            "upcoming_count": merged.get("upcoming_count"),
+            "concluded_count": merged.get("concluded_count"),
+            "fetch_ok": fetch_ok,
+            "fetch_error": fetch_error,
+        }
+
+    @staticmethod
+    def _scrape_meta_youtube_fields(yt_meta: dict[str, Any]) -> dict[str, Any]:
+        if not yt_meta:
+            return {}
+        return {
+            "youtube_error": yt_meta.get("youtube_error"),
+            "youtube_live_count": yt_meta.get("live_count"),
+            "youtube_upcoming_count": yt_meta.get("upcoming_count"),
+            "youtube_concluded_count": yt_meta.get("concluded_count"),
+            "youtube_fetch_ok": yt_meta.get("fetch_ok"),
+            "youtube_fetch_error": yt_meta.get("fetch_error"),
         }
 
     @staticmethod
@@ -323,6 +367,10 @@ class ScheduleScrapeService:
         start = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
         kept: list[dict] = []
         for meeting in meetings:
+            status = str(meeting.get("Status") or meeting.get("status") or "").lower()
+            if status == "live":
+                kept.append(meeting)
+                continue
             raw = meeting.get("Scheduled time")
             if not raw:
                 continue

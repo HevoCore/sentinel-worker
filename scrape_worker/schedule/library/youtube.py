@@ -30,17 +30,25 @@ class Youtube(YouTubeService):
 
     def youtube_table(self, url, timezone="America/New_York", return_soup=False):
         """
-        Upcoming meetings from the channel Live (/streams) tab.
+        Live + upcoming meetings from the channel Live (/streams) tab.
 
-        Fetches /streams once, classifies all cards, then filters to upcoming.
+        Fetches /streams once, classifies all cards, then keeps live and
+        upcoming (concluded VODs stay out of the primary schedule list).
         ``return_soup`` is retained for WallFly call compatibility but always
         returns ``None`` for the soup half — callers should use
         ``get_live_videos(channel_url=...)`` instead of a second soup scrape.
         """
         classified = self.classify_channel_streams(url, timezone=timezone)
+        if classified.get("fetch_ok") is False:
+            error = classified.get("fetch_error") or "ytInitialData missing or unreadable"
+            log.error("youtube_table fetch failed url=%s error=%s", url, error)
+            raise RuntimeError(error)
+        items = list(classified.get("live") or []) + list(
+            classified.get("upcoming") or []
+        )
         meetings = [
             self.stream_item_to_meeting(item, timezone)
-            for item in classified.get("upcoming") or []
+            for item in items
         ]
         seen = set()
         unique = []

@@ -57,6 +57,76 @@ class StreamCardParser:
                     return str(text).strip()
         return ""
 
+    @classmethod
+    def _lockup_is_live(cls, lockup: dict) -> bool:
+        """LIVE badge, badgeStyle, time-status overlay, or 'watching' metadata."""
+        badge = (cls._lockup_badge_text(lockup) or "").lower()
+        if badge == "live" or badge.startswith("live "):
+            return True
+
+        overlays = (
+            ((lockup.get("contentImage") or {}).get("thumbnailViewModel") or {}).get(
+                "overlays"
+            )
+            or lockup.get("overlays")
+            or []
+        )
+        for overlay in overlays:
+            if not isinstance(overlay, dict):
+                continue
+            for node in cls.walk_nodes(overlay):
+                if not isinstance(node, dict):
+                    continue
+                vm = node.get("thumbnailBadgeViewModel") or {}
+                style = str(vm.get("badgeStyle") or "").upper()
+                if "LIVE" in style:
+                    return True
+                status = node.get("thumbnailOverlayTimeStatusRenderer") or {}
+                status_style = str(status.get("style") or "").upper()
+                if "LIVE" in status_style:
+                    return True
+                label = (
+                    (
+                        ((status.get("text") or {}).get("accessibility") or {}).get(
+                            "accessibilityData"
+                        )
+                        or {}
+                    ).get("label")
+                    or ""
+                )
+                if str(label).strip().lower() == "live":
+                    return True
+
+        meta = lockup.get("metadata") or {}
+        meta_vm = meta.get("lockupMetadataViewModel") or meta
+        for content in cls._lockup_metadata_texts(meta_vm):
+            low = content.lower()
+            if "watching" in low or "started streaming" in low:
+                return True
+        return False
+
+    @classmethod
+    def live_broadcast_start(cls, player_response) -> Optional[datetime]:
+        """Watch-page liveBroadcastDetails.startTimestamp (UTC)."""
+        if not isinstance(player_response, dict):
+            return None
+        try:
+            details = (
+                (player_response.get("microformat") or {}).get(
+                    "playerMicroformatRenderer"
+                )
+                or {}
+            ).get("liveBroadcastDetails") or {}
+            raw = details.get("startTimestamp")
+            if not raw:
+                return None
+            when = date_parser.parse(str(raw))
+            if when.tzinfo is None:
+                when = pytz.UTC.localize(when)
+            return when.astimezone(pytz.UTC)
+        except Exception:
+            return None
+
     @staticmethod
     def _text_value(value) -> str:
         """Read simpleText/content/runs text from an ytInitialData value."""
@@ -344,9 +414,20 @@ class StreamCardParser:
         """
         if not isinstance(content, dict) or "continuationItemRenderer" in content:
             return None
-        try:
-            payload = content["richItemRenderer"]["content"]
-        except (KeyError, TypeError):
+        payload = None
+        if "richItemRenderer" in content:
+            try:
+                payload = content["richItemRenderer"]["content"]
+            except (KeyError, TypeError):
+                return None
+        elif "lockupViewModel" in content:
+            payload = content
+        elif "videoRenderer" in content:
+            payload = content
+        else:
+            return None
+
+        if not isinstance(payload, dict):
             return None
 
         # Modern UI
@@ -362,7 +443,9 @@ class StreamCardParser:
             meeting_link = f"https://www.youtube.com/watch?v={video_id}"
             schedule_text = cls._lockup_schedule_text(meta_vm)
             page_date_text = cls._lockup_page_date_text(meta_vm)
-            if badge == "live":
+            if cls._lockup_is_live(lockup) or (
+                page_date_text and "started streaming" in page_date_text.lower()
+            ):
                 return {
                     "status": "live",
                     "video_id": video_id,

@@ -80,14 +80,30 @@ def _run_scrape(payload: dict[str, Any], worker_id: str) -> dict[str, Any]:
     scrape_request = payload.get("scrape_request") or {}
     result = asyncio.run(run_scrape(scrape_request))
     meetings = result.get("meetings") or []
+    meta = result.get("meta") or {}
+    ok = True
+    schedule_type = str(
+        scrape_request.get("schedule_type") or meta.get("schedule_type") or ""
+    ).lower()
+    fetch_failed = meta.get("youtube_fetch_ok") is False or bool(
+        meta.get("youtube_error")
+    )
+    if schedule_type.startswith("youtube") and fetch_failed and not meetings:
+        ok = False
+        log.error(
+            "YouTube schedule scrape failed job_id=%s fetch_ok=%s error=%s",
+            job_id,
+            meta.get("youtube_fetch_ok"),
+            meta.get("youtube_error") or meta.get("youtube_fetch_error"),
+        )
     return {
         "worker_id": worker_id,
-        "ok": True,
+        "ok": ok,
         "load_type": "scrape",
         "job_id": job_id,
         "source_id": payload.get("source_id"),
         "meetings": meetings,
-        "meta": result.get("meta") or {},
+        "meta": meta,
     }
 
 

@@ -83,19 +83,23 @@ class YouTubeService:
         return self.client._extract_yt_initial_data(html)
 
     def get_live_started_at(self, video_id: str):
+        """Watch-page liveBroadcastDetails.startTimestamp only (skip-guard).
+
+        Do not walk ytInitialData for "Started streaming on …" — those strings
+        misfire on unrelated cards and publishDate. Missing timestamp ⇒ not stale.
+        """
         if not video_id:
             return None
         url = f"https://www.youtube.com/watch?v={video_id}"
-        yt_data = self._fetch_youtube_initial_data(url)
-        started = self.parser._extract_started_streaming_from_yt_data(yt_data)
+        self._fetch_youtube_initial_data(url)
+        player = self.client.get_player_response(url)
+        started = self.parser.live_broadcast_start(player)
         if started:
             return started
-        try:
-            html = self._fetch_with_html_scraper(url)
-            if html:
-                return self.parser.parse_started_streaming_text(html)
-        except Exception:
-            log.debug("HTML fallback for started-streaming failed video_id=%s", video_id)
+        log.info(
+            "No liveBroadcastDetails.startTimestamp for video_id=%s; not treating as stale",
+            video_id,
+        )
         return None
 
     def _filter_stale_live_items(self, live_items: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -220,7 +224,7 @@ class YouTubeService:
                 # Do not fabricate a date when ytInitialData did not provide one.
                 scheduled = None
 
-        return {
+        meeting = {
             "Meeting name": title,
             "Scheduled time": scheduled,
             "Meeting link": link,
@@ -228,6 +232,9 @@ class YouTubeService:
             "Status": status,
             "Stream type": "ts_youtube",
         }
+        if item.get("video_id"):
+            meeting["video_id"] = item["video_id"]
+        return meeting
     def classify_channel_streams(
         self, channel_url: str, timezone: str = "America/New_York"
     ) -> dict:
@@ -370,6 +377,8 @@ class YouTubeService:
             "channel_url": streams.get("channel_url") or channel_url,
             "streams_url": streams.get("channel_url"),
             "videos_url": videos.get("channel_url"),
+            "fetch_ok": streams.get("fetch_ok", True),
+            "fetch_error": streams.get("fetch_error"),
         }
 
         # Prefer streams live/upcoming if videos somehow has them
@@ -432,20 +441,50 @@ class YouTubeService:
                 "live_count": 0,
                 "upcoming_count": 0,
                 "concluded_count": 0,
+                "fetch_ok": None,
+                "fetch_error": None,
             }
 
         classified = self.classify_channel_for_fallback(channel_url, timezone=timezone)
+        fetch_ok = classified.get("fetch_ok", True)
+        fetch_error = classified.get("fetch_error")
+        notes.append(
+            f"youtube snapshot live={len(classified['live'])} "
+            f"upcoming={len(classified['upcoming'])} "
+            f"concluded={len(classified['concluded'])} "
+            f"(streams+videos) fetch_ok={fetch_ok}"
+        )
+        if not fetch_ok:
+            error = fetch_error or "ytInitialData missing or unreadable"
+            notes.append(error)
+            log.error(
+                "YouTube overlay fetch failed channel_url=%s error=%s",
+                channel_url,
+                error,
+            )
+            return {
+                "meetings": meetings,
+                "youtube_used": False,
+                "notes": notes,
+                "live_count": 0,
+                "upcoming_count": 0,
+                "concluded_count": 0,
+                "fetch_ok": False,
+                "fetch_error": error,
+            }
+
         all_items = (
             list(classified["live"])
             + list(classified["upcoming"])
             + list(classified["concluded"])
         )
-        notes.append(
-            f"youtube snapshot live={len(classified['live'])} "
-            f"upcoming={len(classified['upcoming'])} "
-            f"concluded={len(classified['concluded'])} "
-            f"(streams+videos)"
-        )
+        if not classified["live"]:
+            log.warning(
+                "youtube snapshot live=0 upcoming=%d concluded=%d channel_url=%s",
+                len(classified["upcoming"]),
+                len(classified["concluded"]),
+                channel_url,
+            )
         if classified.get("streams_url"):
             notes.append(f"streams_url={classified['streams_url']}")
         if classified.get("videos_url"):
@@ -669,7 +708,29 @@ class YouTubeService:
                             if match_type is not None and score >= best_score:
                                 best_score = score
                                 best_meeting = meeting
+                        if best_meeting is None and (
+                            item.get("status") == "live" and len(same_day) == 1
+                        ):
+                            sole = same_day[0]
+                            if not meeting_video_id(sole):
+                                apply_hit(
+                                    sole,
+                                    item,
+                                    how="same-day attach (sole meeting)",
+                                )
+                                existing_vids.add(vid)
+                                continue
                         if best_meeting is None:
+                            if item.get("status") == "live":
+                                stub = self.stream_item_to_meeting(item, timezone)
+                                result.append(stub)
+                                existing_vids.add(vid)
+                                notes.append(
+                                    f"stub unmatched live video_id={vid} "
+                                    f"date={item_date} "
+                                    f"(tab={item.get('source_tab', '?')})"
+                                )
+                                continue
                             notes.append(
                                 f"skip same-day attach video_id={vid} "
                                 f"(no title match on {item_date})"
@@ -724,6 +785,8 @@ class YouTubeService:
             "live_count": len(classified["live"]),
             "upcoming_count": len(classified["upcoming"]),
             "concluded_count": len(classified["concluded"]),
+            "fetch_ok": True,
+            "fetch_error": None,
         }
     def get_live_videos(self, channel_url: str | None = None, soup=None) -> list[dict]:
         """

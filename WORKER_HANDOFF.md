@@ -1,16 +1,20 @@
+l 
+
+r
+
 # Worker handoff — Command (coordinator) protocol
 
-Give this document to the **scrape / transcript worker** team.  
+Give this document to the **scrape / transcript worker** team.
 Command = Sentinel License Registry (this repo). Workers talk **only** to the Command public URL. Never call one-off dynos from Command.
 
 Replace placeholders:
 
-| Placeholder | Example |
-|-------------|---------|
-| `COORDINATOR_URL` | `https://sentinel-registry.example.com` |
-| `WORKER_PUBLIC_URL` | `https://scrape-worker.example.com` |
-| `WORKER_ID` | `scrape-worker-1` |
-| `WORKER_SHARED_TOKEN` | same secret as Command `WORKER_SHARED_TOKEN` |
+| Placeholder             | Example                                       |
+| ----------------------- | --------------------------------------------- |
+| `COORDINATOR_URL`     | `https://sentinel-registry.example.com`     |
+| `WORKER_PUBLIC_URL`   | `https://scrape-worker.example.com`         |
+| `WORKER_ID`           | `scrape-worker-1`                           |
+| `WORKER_SHARED_TOKEN` | same secret as Command`WORKER_SHARED_TOKEN` |
 
 ---
 
@@ -27,11 +31,11 @@ Ignore Command → one-off links. Ignore worker-internal /v1/internal/... from C
 
 **HTTP semantics**
 
-| Code | Meaning |
-|------|---------|
-| **202** | Accepted (queued / will run). **Not** “Playwright started”. |
-| **200** | OK (sync done or accepted — treat like accepted if job continues via callback). |
-| **4xx/5xx** | Reject — Command marks job failed / transcript fail. |
+| Code              | Meaning                                                                          |
+| ----------------- | -------------------------------------------------------------------------------- |
+| **202**     | Accepted (queued / will run).**Not** “Playwright started”.               |
+| **200**     | OK (sync done or accepted — treat like accepted if job continues via callback). |
+| **4xx/5xx** | Reject — Command marks job failed / transcript fail.                            |
 
 Job is **done** only when worker posts **result** / **fail** (or transcript PDF / transcript fail). Do **not** mark Command-side work complete on 202 alone.
 
@@ -240,14 +244,14 @@ found, the matched result may add the YouTube `Meeting link`, `video_id`, and
 
 All scrape/fallback/monitor paths go through `scrape_worker/youtube_core/`:
 
-| Layer | Role |
-|-------|------|
-| `client.py` | Playwright/HTML `ytInitialData` fetch, consent, `/streams`+`/videos`, operation-scoped cache |
-| `parser.py` | `lockupViewModel` + legacy `videoRenderer`; dates only from structured metadata |
-| `matching.py` | Ranking: video_id → title strategies → structured-date proximity |
-| `service.py` | Channel snapshot, stale-live skip, calendar overlay, stream-status |
-| `schedule/library/youtube.py` | Thin adapters: `youtube_table`, `youtube_table_la` (SAP filter), `youtube_table_md` (next per day) |
-| `utils/youtube.py` | Compatibility facade for dedicated parsers (download/API helpers retained) |
+| Layer                           | Role                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `client.py`                   | Playwright/HTML`ytInitialData` fetch, consent, `/streams`+`/videos`, operation-scoped cache       |
+| `parser.py`                   | `lockupViewModel` + legacy `videoRenderer`; dates only from structured metadata                     |
+| `matching.py`                 | Ranking: video_id → title strategies → structured-date proximity                                      |
+| `service.py`                  | Channel snapshot, stale-live skip, calendar overlay, stream-status                                      |
+| `schedule/library/youtube.py` | Thin adapters:`youtube_table`, `youtube_table_la` (SAP filter), `youtube_table_md` (next per day) |
+| `utils/youtube.py`            | Compatibility facade for dedicated parsers (download/API helpers retained)                              |
 
 Command job IDs + leases replace WallFly’s Bubble claim/verify. Ranking and
 Maryland/LA policies are retained; the legacy-only WallFly scraper is not.
@@ -370,13 +374,13 @@ calendar scrape itself fails and the channel becomes the source of meetings.
 
 ### Terminal statuses (job ends — no retry loop)
 
-| `status` | Command maps to | Job |
-|----------|-----------------|-----|
-| `live` | live | continues |
-| `upcoming` / `scheduled` | upcoming | continues |
-| `fetch_failed` / `unknown` | *(ignore / keep lease)* | **continues** — page could not be read; do **not** treat as adjourned |
-| `concluded` / `adjourned` / `ended` / `timeout` | adjourned | **done** |
-| **`skipped`** | **no status change** | **done** (e.g. 24/7 stream — do **not** keep polling) |
+| `status`                                              | Command maps to            | Job                                                                                |
+| ------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------- |
+| `live`                                                | live                       | continues                                                                          |
+| `upcoming` / `scheduled`                            | upcoming                   | continues                                                                          |
+| `fetch_failed` / `unknown`                          | *(ignore / keep lease)*  | **continues** — page could not be read; do **not** treat as adjourned |
+| `concluded` / `adjourned` / `ended` / `timeout` | adjourned                  | **done**                                                                     |
+| **`skipped`**                                   | **no status change** | **done** (e.g. 24/7 stream — do **not** keep polling)                 |
 
 #### `skipped` does not adjourn the meeting
 
@@ -469,9 +473,9 @@ Return **202** after queueing a one-off. Cold dyno + PDF build can be slow — d
 
 **Preferred chain**
 
-1. **YouTube Innertube `get_panel`** (same path as the page “Show transcript” button).  
-2. On empty / block / parse failure → **[TranscriptAPI](https://transcriptapi.com/docs/api/)**.  
-3. Build a simple timestamped PDF.  
+1. **YouTube Innertube `get_panel`** (same path as the page “Show transcript” button).
+2. On empty / block / parse failure → **[TranscriptAPI](https://transcriptapi.com/docs/api/)**.
+3. Build a simple timestamped PDF.
 4. Upload to Command.
 
 #### Path A — Innertube `get_panel`
@@ -550,7 +554,7 @@ Env on worker: `TRANSCRIPTAPI_API_KEY` (or `TRANSCRIPTAPI_KEY`).
 
 ### 6.3 Worker → Command (PDF success)
 
-`POST {COORDINATOR_URL}/v1/workers/transcripts`  
+`POST {COORDINATOR_URL}/v1/workers/transcripts`
 **multipart/form-data** (not JSON):
 
 ```bash
@@ -594,11 +598,11 @@ via the `cues` field (receive → process → return is covered by §6.1–6.4).
 }
 ```
 
-| `reason` | Meaning |
-|----------|---------|
-| `no_captions` | Both Innertube and TranscriptAPI agree the video has no captions — final, no retry needed |
-| `rate_limited` | Upstream throttling — Command cools the transcript queue (~30 minutes) |
-| `error` | Unexpected failure |
+| `reason`       | Meaning                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| `no_captions`  | Both Innertube and TranscriptAPI agree the video has no captions — final, no retry needed |
+| `rate_limited` | Upstream throttling — Command cools the transcript queue (~30 minutes)                    |
+| `error`        | Unexpected failure                                                                         |
 
 Set `"rate_limited": true` when YouTube / upstream is IP-throttling — Command cools the transcript queue (~30 minutes).
 
@@ -606,12 +610,12 @@ Set `"rate_limited": true` when YouTube / upstream is IP-throttling — Command 
 
 ## 7. Worker endpoints Command expects
 
-| Method | Path | Role |
-|--------|------|------|
-| `POST` | `/v1/commands/scrape` | Accept scrape job → **202** |
-| `POST` | `/v1/commands/stream-status` | Accept monitor job → **202** |
-| `POST` | `/v1/commands/transcript` | Accept transcript job → **202** |
-| `GET` | `/health` | Liveness |
+| Method   | Path                           | Role                                  |
+| -------- | ------------------------------ | ------------------------------------- |
+| `POST` | `/v1/commands/scrape`        | Accept scrape job →**202**     |
+| `POST` | `/v1/commands/stream-status` | Accept monitor job →**202**    |
+| `POST` | `/v1/commands/transcript`    | Accept transcript job →**202** |
+| `GET`  | `/health`                    | Liveness                              |
 
 Internal one-off URLs are **not** registered with Command.
 
@@ -619,13 +623,13 @@ Internal one-off URLs are **not** registered with Command.
 
 ## 8. Timeouts / leases (Command side)
 
-| Setting | Typical | Meaning |
-|---------|---------|---------|
-| Scrape accept timeout | 180s | HTTP to middleman only |
-| Monitor accept timeout | 120s | HTTP to middleman only |
-| Scrape job lease | 300s | Renew via heartbeat / running_jobs |
-| Monitor poll lease | ~3× poll interval | Renew on each poll result |
-| Transcript wait after dispatch | ~1800s | Re-dispatch if no PDF/fail |
+| Setting                        | Typical            | Meaning                            |
+| ------------------------------ | ------------------ | ---------------------------------- |
+| Scrape accept timeout          | 180s               | HTTP to middleman only             |
+| Monitor accept timeout         | 120s               | HTTP to middleman only             |
+| Scrape job lease               | 300s               | Renew via heartbeat / running_jobs |
+| Monitor poll lease             | ~3× poll interval | Renew on each poll result          |
+| Transcript wait after dispatch | ~1800s             | Re-dispatch if no PDF/fail         |
 
 Loosen worker cold-start: accept fast (202), do heavy work async.
 

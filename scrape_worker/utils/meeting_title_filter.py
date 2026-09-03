@@ -270,6 +270,14 @@ def filter_meetings_by_category(
         if relevant:
             kept.append(meeting)
             continue
+        status = str(meeting.get("Status") or meeting.get("status") or "").lower()
+        if status == "live":
+            kept.append(meeting)
+            notes.append(
+                f"kept live despite category filter title={title!r} "
+                f"best={category!r} score={score:.2f} type={match_type}"
+            )
+            continue
         dropped += 1
         notes.append(
             f"filtered title={title!r} best={category!r} "

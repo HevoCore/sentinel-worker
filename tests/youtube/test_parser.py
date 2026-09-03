@@ -93,3 +93,64 @@ def test_stale_live_detection():
     assert not StreamCardParser.is_stale_live(started, max_age_hours=24)
     old = datetime(2020, 1, 1, tzinfo=pytz.UTC)
     assert StreamCardParser.is_stale_live(old, max_age_hours=24)
+
+
+def test_lockup_live_badge_style_without_text(tz):
+    item = lockup_card(
+        video_id="styleLive001",
+        title="City Council",
+        badge=None,
+        metadata_parts=["1.2K watching"],
+    )
+    lockup = item["richItemRenderer"]["content"]["lockupViewModel"]
+    lockup["contentImage"] = {
+        "thumbnailViewModel": {
+            "overlays": [
+                {
+                    "thumbnailBottomOverlayViewModel": {
+                        "badges": [
+                            {
+                                "thumbnailBadgeViewModel": {
+                                    "badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+    card = StreamCardParser.classify_rich_item(item, timezone=tz)
+    assert card is not None
+    assert card.status == "live"
+
+
+def test_lockup_started_streaming_metadata_is_live(tz):
+    item = lockup_card(
+        video_id="startedLive1",
+        title="County Commission",
+        badge=None,
+        metadata_parts=["Started streaming 2 hours ago"],
+    )
+    card = StreamCardParser.classify_rich_item(item, timezone=tz)
+    assert card is not None
+    assert card.status == "live"
+
+
+def test_live_broadcast_start_ignores_publish_date():
+    started = StreamCardParser.live_broadcast_start(
+        {
+            "microformat": {
+                "playerMicroformatRenderer": {
+                    "publishDate": "2023-12-01",
+                    "liveBroadcastDetails": {
+                        "startTimestamp": "2026-09-02T18:00:00+00:00",
+                        "isLiveNow": True,
+                    },
+                }
+            }
+        }
+    )
+    assert started is not None
+    assert started.year == 2026
+    assert started.month == 9

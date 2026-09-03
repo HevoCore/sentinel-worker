@@ -17,6 +17,10 @@ _YT_INITIAL_DATA_RE = re.compile(
     r"var ytInitialData\s*=\s*(\{.*?\});\s*</script>",
     re.DOTALL,
 )
+_YT_PLAYER_RESPONSE_RE = re.compile(
+    r"var ytInitialPlayerResponse\s*=\s*(\{.*?\});\s*</script>",
+    re.DOTALL,
+)
 _CONSENT_BUTTON_LABELS = (
     "Accept all",
     "Accept All",
@@ -27,6 +31,7 @@ _CONSENT_BUTTON_LABELS = (
 
 # Default shared cache (cleared per scrape/status by clear_cache).
 _YT_PAGE_CACHE: dict[str, object] = {}
+_YT_PLAYER_CACHE: dict[str, object] = {}
 _YT_PAGE_CACHE_LOCK = threading.Lock()
 _YT_CLASSIFY_CACHE: dict[tuple[str, str, str], dict] = {}
 
@@ -35,6 +40,7 @@ def clear_cache() -> None:
     """Drop cached ytInitialData / classifications."""
     with _YT_PAGE_CACHE_LOCK:
         _YT_PAGE_CACHE.clear()
+        _YT_PLAYER_CACHE.clear()
         _YT_CLASSIFY_CACHE.clear()
 
 
@@ -74,8 +80,6 @@ class YtInitialDataClient:
                 return _YT_PAGE_CACHE[key]
 
         data = self._fetch_youtube_initial_data_uncached(url)
-        with _YT_PAGE_CACHE_LOCK:
-            _YT_PAGE_CACHE[key] = data
         return data
 
     def _fetch_youtube_initial_data_many(self, urls: list[str]) -> dict[str, object]:
@@ -104,8 +108,8 @@ class YtInitialDataClient:
                 key = cache_key_for_url(url)
                 html = self._fetch_with_html_scraper(url)
                 data = self._extract_yt_initial_data(html)
-                with _YT_PAGE_CACHE_LOCK:
-                    _YT_PAGE_CACHE[key] = data
+                player = self._extract_yt_initial_player_response(html)
+                self._store_page_cache(key, data, player)
                 out[key] = data
             return out
 
@@ -134,8 +138,6 @@ class YtInitialDataClient:
                 for url in needed:
                     key = cache_key_for_url(url)
                     data = self._load_yt_initial_data_on_page(page, url)
-                    with _YT_PAGE_CACHE_LOCK:
-                        _YT_PAGE_CACHE[key] = data
                     out[key] = data
             finally:
                 browser.close()
@@ -148,7 +150,10 @@ class YtInitialDataClient:
         except ImportError:
             log.warning("Playwright not installed; falling back to HtmlScraper HTML parse")
             html = self._fetch_with_html_scraper(url)
-            return self._extract_yt_initial_data(html)
+            data = self._extract_yt_initial_data(html)
+            player = self._extract_yt_initial_player_response(html)
+            self._store_page_cache(cache_key_for_url(url), data, player)
+            return data
 
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -180,6 +185,7 @@ class YtInitialDataClient:
         log.info("Playwright navigating to %s", url)
         page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         self._dismiss_youtube_consent(page)
+        html = None
         try:
             page.wait_for_function(
                 "() => window.ytInitialData && window.ytInitialData.contents",
@@ -191,12 +197,40 @@ class YtInitialDataClient:
                 url,
                 page.url,
             )
-            return self._extract_yt_initial_data(page.content())
+            html = page.content()
+            data = self._extract_yt_initial_data(html)
+            player = self._extract_yt_initial_player_response(html)
+            self._store_page_cache(cache_key_for_url(url), data, player)
+            return data
 
         page.wait_for_timeout(1000)
         data = page.evaluate("() => window.ytInitialData")
+        player = None
+        try:
+            player = page.evaluate("() => window.ytInitialPlayerResponse || null")
+        except Exception:
+            player = None
+        if not player:
+            html = html or page.content()
+            player = self._extract_yt_initial_player_response(html)
         log.info("Loaded ytInitialData via Playwright (final_url=%s)", page.url)
+        self._store_page_cache(cache_key_for_url(url), data, player)
         return data
+
+    def get_player_response(self, url: str):
+        """Cached ytInitialPlayerResponse for a previously fetched URL (watch pages)."""
+        key = cache_key_for_url(url)
+        with _YT_PAGE_CACHE_LOCK:
+            if key in _YT_PLAYER_CACHE:
+                return _YT_PLAYER_CACHE[key]
+        return None
+
+    @staticmethod
+    def _store_page_cache(key: str, data, player=None) -> None:
+        with _YT_PAGE_CACHE_LOCK:
+            _YT_PAGE_CACHE[key] = data
+            if player is not None:
+                _YT_PLAYER_CACHE[key] = player
 
     def _fetch_with_html_scraper(self, url: str) -> str:
         if self.scraper is None:
@@ -243,24 +277,23 @@ class YtInitialDataClient:
             log.exception("Error while dismissing YouTube consent")
 
     @staticmethod
-    def _extract_yt_initial_data(html: str):
+    def _extract_js_object(html: str, var_name: str, regex):
         if not html:
             return None
-        match = _YT_INITIAL_DATA_RE.search(html)
+        match = regex.search(html)
         if match:
             try:
                 return json.loads(match.group(1))
             except json.JSONDecodeError:
-                log.exception("Failed to JSON-decode ytInitialData (regex path)")
+                log.exception("Failed to JSON-decode %s (regex path)", var_name)
 
-        marker = "var ytInitialData = "
-        start = html.find(marker)
-        if start < 0:
-            marker = "ytInitialData = "
+        for marker in (f"var {var_name} = ", f"{var_name} = "):
             start = html.find(marker)
-        if start < 0:
+            if start >= 0:
+                json_str = html[start + len(marker) :]
+                break
+        else:
             return None
-        json_str = html[start + len(marker) :]
         brace_count = 0
         end = None
         for i, char in enumerate(json_str):
@@ -276,8 +309,18 @@ class YtInitialDataClient:
         try:
             return json.loads(json_str[:end])
         except json.JSONDecodeError:
-            log.exception("Failed to JSON-decode ytInitialData (brace path)")
+            log.exception("Failed to JSON-decode %s (brace path)", var_name)
             return None
+
+    @classmethod
+    def _extract_yt_initial_data(cls, html: str):
+        return cls._extract_js_object(html, "ytInitialData", _YT_INITIAL_DATA_RE)
+
+    @classmethod
+    def _extract_yt_initial_player_response(cls, html: str):
+        return cls._extract_js_object(
+            html, "ytInitialPlayerResponse", _YT_PLAYER_RESPONSE_RE
+        )
 
     @classmethod
     def _live_tab_items(cls, yt_initial_data: dict) -> list:

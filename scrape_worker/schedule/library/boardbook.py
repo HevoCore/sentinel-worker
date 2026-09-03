@@ -150,6 +150,11 @@ class Boardbook:
             upcoming_youtube_meetings = ytScraper.youtube_table(
                 self.channel_url, timezone
             )
+            upcoming_youtube_meetings = [
+                m
+                for m in (upcoming_youtube_meetings or [])
+                if str(m.get("Status") or "").lower() != "live"
+            ]
         log.info(f"Upcoming youtube meetings: {upcoming_youtube_meetings}")
 
         # Add upcoming youtube meets to the meetings

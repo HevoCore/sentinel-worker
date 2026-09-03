@@ -149,6 +149,10 @@ class Meeting(BaseModel):
     access_id: Optional[str] = Field(default=None, alias="Access ID")
     user_live_link: Optional[str] = Field(default=None, alias="user_live_link")
     user_archive_link: Optional[str] = Field(default=None, alias="user_archive_link")
+    video_id: Optional[str] = Field(
+        default=None,
+        description="YouTube video id when the meeting is tied to a stream",
+    )
 
     model_config = {
         "populate_by_name": True,
@@ -174,6 +178,12 @@ class ScrapeMeta(BaseModel):
     primary_error: Optional[str] = None
     youtube_used: bool = False
     youtube_channel_url: Optional[str] = None
+    youtube_error: Optional[str] = None
+    youtube_live_count: Optional[int] = None
+    youtube_upcoming_count: Optional[int] = None
+    youtube_concluded_count: Optional[int] = None
+    youtube_fetch_ok: Optional[bool] = None
+    youtube_fetch_error: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
 
 

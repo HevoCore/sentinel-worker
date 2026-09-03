@@ -73,6 +73,11 @@ class Kentuckylegislature:
         # Get upcoming youtube meets
         yt_scraper = Youtube()
         upcoming_yt_meetings, youtube_page_soup = yt_scraper.youtube_table(url=self.channel_url, return_soup=True)
+        upcoming_yt_meetings = [
+            m
+            for m in (upcoming_yt_meetings or [])
+            if str(m.get("Status") or "").lower() != "live"
+        ]
         self.meetings.extend(upcoming_yt_meetings)
         
         # Get live youtube meets
