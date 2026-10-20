@@ -23,6 +23,10 @@ _PANEL_PARAMS_RE = re.compile(
     r'"contentSourcePanelIdentifier":\{"surface":"ENGAGEMENT_PANEL_SURFACE_WATCH",'
     r'"tag":"PAmodern_transcript_view"\},"globalConfiguration":\{"params":"([^"]+)"'
 )
+_BOT_CHALLENGE_RE = re.compile(
+    r"unusual traffic|recaptcha|our systems have detected|please show you.?re not a robot",
+    re.IGNORECASE,
+)
 
 
 class TranscriptError(RuntimeError):
@@ -34,11 +38,23 @@ class TranscriptError(RuntimeError):
         *,
         rate_limited: bool = False,
         reason: str | None = None,
+        blocked: bool = False,
+        providers: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.rate_limited = rate_limited
-        # Structured code for downstream filtering (e.g. "no_captions", "rate_limited").
-        self.reason = reason or ("rate_limited" if rate_limited else "error")
+        # Structured code: captcha_blocked | no_captions | rate_limited |
+        # provider_unpaid | provider_error | error
+        if reason:
+            self.reason = reason
+        elif blocked:
+            self.reason = "captcha_blocked"
+        elif rate_limited:
+            self.reason = "rate_limited"
+        else:
+            self.reason = "error"
+        self.blocked = blocked or self.reason == "captcha_blocked"
+        self.providers = providers or {}
 
 
 def extract_video_id(video_id: str | None, video_url: str | None) -> str:
@@ -160,6 +176,21 @@ def _with_cue_durations(cues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _is_bot_challenge(response: httpx.Response) -> bool:
+    """True when YouTube/Google served a captcha or sorry-page instead of watch HTML.
+
+    httpx follow_redirects=True turns the original 429 into a 200 on
+    google.com/sorry/index, so callers must inspect the final URL and history.
+    """
+    urls = [str(response.url), *(str(step.url) for step in response.history)]
+    if any("google.com/sorry" in url or "/sorry/index" in url for url in urls):
+        return True
+    if any(step.status_code in {403, 429} for step in response.history):
+        return True
+    snippet = response.text[:12_000]
+    return bool(_BOT_CHALLENGE_RE.search(snippet))
+
+
 def _build_panel_params(video_id: str) -> str:
     """
     Serialize the get_panel params proto: field 149 { 1: video_id, 3: 1 }.
@@ -184,14 +215,26 @@ def fetch_innertube_panel(video_id: str, *, timezone: str = "America/New_York") 
     }
     with httpx.Client(timeout=45.0, follow_redirects=True, headers=headers) as client:
         watch = client.get(watch_url)
-        if watch.status_code in {403, 429}:
-            raise TranscriptError("YouTube rate limited the transcript request", rate_limited=True)
+        if watch.status_code in {403, 429} or _is_bot_challenge(watch):
+            raise TranscriptError(
+                "YouTube captcha / sorry page blocked the watch request",
+                reason="captcha_blocked",
+                rate_limited=True,
+                blocked=True,
+            )
         watch.raise_for_status()
 
         visitor_match = _JSON_PATTERNS["visitor_data"].search(watch.text)
         version_match = _JSON_PATTERNS["client_version"].search(watch.text)
         visitor_data = visitor_match.group(1) if visitor_match else ""
         client_version = version_match.group(1) if version_match else "2.20260728.01.00"
+        if not visitor_data and "ytInitialData" not in watch.text:
+            raise TranscriptError(
+                "YouTube watch HTML had no ytInitialData (blocked or consent page)",
+                reason="captcha_blocked",
+                rate_limited=True,
+                blocked=True,
+            )
 
         context = {
             "client": {
@@ -247,7 +290,10 @@ def fetch_transcript_api(
     language: str = "en",
 ) -> list[dict[str, Any]]:
     if not api_key:
-        raise TranscriptError("TRANSCRIPTAPI_API_KEY is not configured")
+        raise TranscriptError(
+            "TRANSCRIPTAPI_API_KEY is not configured",
+            reason="provider_error",
+        )
     with httpx.Client(timeout=90.0, follow_redirects=True) as client:
         response = client.get(
             "https://transcriptapi.com/api/v2/youtube/transcript",
@@ -267,9 +313,15 @@ def fetch_transcript_api(
             f"TranscriptAPI returned 404: {response.text[:200]}",
             reason="no_captions",
         )
+    if response.status_code in {401, 402, 403}:
+        raise TranscriptError(
+            f"TranscriptAPI returned {response.status_code}: {response.text[:200]}",
+            reason="provider_unpaid" if response.status_code == 402 else "provider_error",
+        )
     if response.status_code >= 400:
         raise TranscriptError(
-            f"TranscriptAPI returned {response.status_code}: {response.text[:200]}"
+            f"TranscriptAPI returned {response.status_code}: {response.text[:200]}",
+            reason="provider_error",
         )
     data = response.json()
     rows = data if isinstance(data, list) else data.get("transcript") or data.get("segments") or []
@@ -295,6 +347,56 @@ def fetch_transcript_api(
     return _with_cue_durations(cues)
 
 
+def _provider_snapshot(exc: BaseException) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": getattr(exc, "reason", "error"),
+        "error": str(exc),
+        "blocked": bool(getattr(exc, "blocked", False)),
+        "rate_limited": bool(getattr(exc, "rate_limited", False)),
+    }
+
+
+def _combine_transcript_failures(
+    primary: BaseException,
+    fallback: TranscriptError,
+) -> TranscriptError:
+    """Keep captcha / provider / no-captions distinct instead of mashing them."""
+    primary_reason = getattr(primary, "reason", "error")
+    fallback_reason = fallback.reason
+    primary_blocked = bool(getattr(primary, "blocked", False)) or primary_reason == "captcha_blocked"
+    providers = {
+        "innertube": _provider_snapshot(primary),
+        "transcriptapi": _provider_snapshot(fallback),
+    }
+    if primary_reason == "no_captions" and fallback_reason == "no_captions":
+        reason = "no_captions"
+    elif primary_blocked:
+        reason = "captcha_blocked"
+    elif primary_reason == "rate_limited" or fallback_reason == "rate_limited":
+        reason = "rate_limited"
+    elif fallback_reason in {"provider_unpaid", "provider_error"}:
+        reason = fallback_reason
+    elif primary_reason in {"provider_unpaid", "provider_error"}:
+        reason = primary_reason
+    else:
+        reason = "error"
+    rate_limited = reason in {"captcha_blocked", "rate_limited"} or bool(
+        getattr(primary, "rate_limited", False) or fallback.rate_limited
+    )
+    message = (
+        f"Innertube: {primary_reason} — {primary}. "
+        f"TranscriptAPI: {fallback_reason} — {fallback}."
+    )
+    return TranscriptError(
+        message,
+        reason=reason,
+        rate_limited=rate_limited,
+        blocked=primary_blocked,
+        providers=providers,
+    )
+
+
 def fetch_transcript(
     video_id: str,
     *,
@@ -312,19 +414,7 @@ def fetch_transcript(
                 "transcriptapi",
             )
         except TranscriptError as fallback_exc:
-            rate_limited = bool(getattr(exc, "rate_limited", False)) or fallback_exc.rate_limited
-            primary_reason = getattr(exc, "reason", "error")
-            fallback_reason = fallback_exc.reason
-            combined_reason = (
-                "no_captions"
-                if primary_reason == "no_captions" and fallback_reason == "no_captions"
-                else ("rate_limited" if rate_limited else "error")
-            )
-            raise TranscriptError(
-                f"Innertube failed: {exc}; TranscriptAPI failed: {fallback_exc}",
-                rate_limited=rate_limited,
-                reason=combined_reason,
-            ) from fallback_exc
+            raise _combine_transcript_failures(exc, fallback_exc) from fallback_exc
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -448,6 +538,8 @@ def post_failure(
     error: str,
     rate_limited: bool,
     reason: str | None = None,
+    blocked: bool = False,
+    providers: dict[str, Any] | None = None,
 ) -> None:
     if not url:
         log.error("Transcript fail_url missing: %s", error)
@@ -457,14 +549,20 @@ def post_failure(
         "X-Worker-Id": worker_id,
         "Content-Type": "application/json",
     }
+    resolved_reason = reason or (
+        "captcha_blocked" if blocked else ("rate_limited" if rate_limited else "error")
+    )
     body = {
         "worker_id": worker_id,
         "meeting_id": meeting_id,
         "video_id": video_id,
         "error": error,
-        "rate_limited": rate_limited,
-        "reason": reason or ("rate_limited" if rate_limited else "error"),
+        "rate_limited": rate_limited or resolved_reason in {"captcha_blocked", "rate_limited"},
+        "blocked": blocked or resolved_reason == "captcha_blocked",
+        "reason": resolved_reason,
     }
+    if providers:
+        body["providers"] = providers
     try:
         with httpx.Client(timeout=90.0) as client:
             response = client.post(url, headers=headers, json=body)

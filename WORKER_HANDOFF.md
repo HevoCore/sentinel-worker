@@ -592,19 +592,41 @@ via the `cues` field (receive → process → return is covered by §6.1–6.4).
   "worker_id": "scrape-worker-1",
   "meeting_id": "austin-tx:e7l6sylixl0",
   "video_id": "E7l6sYLIXl0",
-  "error": "Innertube blocked; TranscriptAPI 404 no captions",
-  "rate_limited": false,
-  "reason": "no_captions"
+  "error": "Innertube: captcha_blocked — YouTube captcha / sorry page blocked the watch request. TranscriptAPI: provider_unpaid — TranscriptAPI returned 402: …",
+  "rate_limited": true,
+  "blocked": true,
+  "reason": "captcha_blocked",
+  "providers": {
+    "innertube": {
+      "ok": false,
+      "reason": "captcha_blocked",
+      "error": "YouTube captcha / sorry page blocked the watch request",
+      "blocked": true,
+      "rate_limited": true
+    },
+    "transcriptapi": {
+      "ok": false,
+      "reason": "provider_unpaid",
+      "error": "TranscriptAPI returned 402: …",
+      "blocked": false,
+      "rate_limited": false
+    }
+  }
 }
 ```
 
-| `reason`       | Meaning                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------ |
-| `no_captions`  | Both Innertube and TranscriptAPI agree the video has no captions — final, no retry needed |
-| `rate_limited` | Upstream throttling — Command cools the transcript queue (~30 minutes)                    |
-| `error`        | Unexpected failure                                                                         |
+| `reason`           | Meaning |
+| ------------------ | ------- |
+| `captcha_blocked`  | YouTube served a captcha / sorry page. Not proof the video lacks captions. `blocked: true`, `rate_limited: true`. |
+| `no_captions`      | **Both** Innertube and TranscriptAPI agree the video has no captions — final, no retry. |
+| `rate_limited`     | Upstream throttling (not a captcha page) — Command cools the transcript queue (~30 minutes). |
+| `provider_unpaid`  | TranscriptAPI 402 / no paid plan. |
+| `provider_error`   | TranscriptAPI missing key or other 4xx/5xx. |
+| `error`            | Unexpected failure. |
 
-Set `"rate_limited": true` when YouTube / upstream is IP-throttling — Command cools the transcript queue (~30 minutes).
+`reason` is the headline. Inspect `providers.innertube` vs `providers.transcriptapi` to see each path. Do **not** treat `captcha_blocked` as `no_captions`.
+
+Set `"rate_limited": true` for captcha and IP throttling so Command can cool the transcript queue.
 
 ---
 

@@ -29,26 +29,26 @@ Local default: `DISPATCH_MODE=auto` with no Heroku API key → each job runs in 
 
 One `.env` in this directory (see `.env.example`). Important keys:
 
-| Key | Notes |
-|-----|--------|
-| `WORKER_ID` | Unique per process |
-| `WORKER_SHARED_TOKEN` | Same value as coordinator (`WORKER_TOKEN` alias OK) |
-| `COORDINATOR_URL` | Registry base URL |
-| `WORKER_PUBLIC_URL` | This worker’s public base URL (callback target for jobs) |
-| `WORKER_REGISTRATION_OPEN` | `1` to self-register on boot |
-| `HEROKU_ONEOFF_LIMIT` / `WORKER_CAPACITY` | Max concurrent jobs (**default 50**) |
-| `RESERVE_SCRAPE` / `RESERVE_TRANSCRIPT` | Reserved slots (default `1` each) so monitors cannot fill the pool |
-| `DISPATCH_MODE` | `auto` (Heroku if configured, else local) \| `local` \| `heroku` |
-| `HEROKU_API_KEY` / `HEROKU_APP_NAME` | Required on Heroku to spawn one-offs |
-| `HEROKU_DYNO_SIZE` | One-off size (`standard-1x` default) |
-| `INTERNAL_CALLBACK_TOKEN` | Job→middleman Bearer (defaults to shared token) |
-| `TRANSCRIPTAPI_API_KEY` | TranscriptAPI fallback when YouTube Innertube is blocked |
-| `WORKER_HEARTBEAT_SECONDS` | Periodic heartbeat interval (default `60`) |
-| `COORDINATOR_RETRY_ATTEMPTS` | Result relay attempts (default `3`); exponential backoff starts at 5s and doubles |
-| `COORDINATOR_PENDING_MAX` | Results buffered while Command is down (default `500`, `0` disables) |
-| `SHUTDOWN_GRACE_SECONDS` | Wait for browser children on shutdown before SIGKILL (default `5`) |
-| `OPENAI_API_KEY` | Needed for LLM scrape mode |
-| `SCRAPER_MODE` | `embedded` (default) or `http` |
+| Key                                           | Notes                                                                              |
+| --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `WORKER_ID`                                 | Unique per process                                                                 |
+| `WORKER_SHARED_TOKEN`                       | Same value as coordinator (`WORKER_TOKEN` alias OK)                              |
+| `COORDINATOR_URL`                           | Registry base URL                                                                  |
+| `WORKER_PUBLIC_URL`                         | This worker’s public base URL (callback target for jobs)                          |
+| `WORKER_REGISTRATION_OPEN`                  | `1` to self-register on boot                                                     |
+| `HEROKU_ONEOFF_LIMIT` / `WORKER_CAPACITY` | Max concurrent jobs (**default 50**)                                         |
+| `RESERVE_SCRAPE` / `RESERVE_TRANSCRIPT`   | Reserved slots (default`1` each) so monitors cannot fill the pool                |
+| `DISPATCH_MODE`                             | `auto` (Heroku if configured, else local) \| `local` \| `heroku`             |
+| `HEROKU_API_KEY` / `HEROKU_APP_NAME`      | Required on Heroku to spawn one-offs                                               |
+| `HEROKU_DYNO_SIZE`                          | One-off size (`standard-1x` default)                                             |
+| `INTERNAL_CALLBACK_TOKEN`                   | Job→middleman Bearer (defaults to shared token)                                   |
+| `TRANSCRIPTAPI_API_KEY`                     | TranscriptAPI fallback when YouTube Innertube is blocked                           |
+| `WORKER_HEARTBEAT_SECONDS`                  | Periodic heartbeat interval (default`60`)                                        |
+| `COORDINATOR_RETRY_ATTEMPTS`                | Result relay attempts (default`3`); exponential backoff starts at 5s and doubles |
+| `COORDINATOR_PENDING_MAX`                   | Results buffered while Command is down (default`500`, `0` disables)            |
+| `SHUTDOWN_GRACE_SECONDS`                    | Wait for browser children on shutdown before SIGKILL (default`5`)                |
+| `OPENAI_API_KEY`                            | Needed for LLM scrape mode                                                         |
+| `SCRAPER_MODE`                              | `embedded` (default) or `http`                                                 |
 
 **Capacity:** every worker advertises and enforces up to **50** loads. Stream-status has priority; **1** scrape and **1** transcript slot stay reserved. On Heroku, each running job is a separate one-off dyno (cost scales with concurrency).
 
@@ -350,13 +350,13 @@ This app uses **classic buildpacks** (Python + Apt for Chromium libs), not the c
 
 Deploy from the **monorepo root** (`sentinel-worker`): root `Procfile` / `requirements.txt` / `Aptfile` / `runtime.txt` / `bin/post_compile` point at `scrape_worker/`. The **web** dyno is the middleman only. Jobs run as **one-off** dynos (`cd scrape_worker && python -m jobs.runner`) via the Platform API — set `HEROKU_API_KEY` and `HEROKU_APP_NAME`.
 
-| File | Purpose |
-|------|---------|
-| `Procfile` (repo root) | `web` → uvicorn with `--app-dir scrape_worker` |
-| `requirements.txt` (repo root) | Includes `scrape_worker/requirements.txt` |
+| File                                                 | Purpose                                              |
+| ---------------------------------------------------- | ---------------------------------------------------- |
+| `Procfile` (repo root)                             | `web` → uvicorn with `--app-dir scrape_worker`  |
+| `requirements.txt` (repo root)                     | Includes`scrape_worker/requirements.txt`           |
 | `runtime.txt` / `Aptfile` / `bin/post_compile` | Python version, Chromium OS libs, Playwright install |
-| `scrape_worker/app.json` | App metadata / suggested config |
-| `scrape_worker/scripts/setup-heroku.sh` | Create app, set stack + buildpacks + defaults |
+| `scrape_worker/app.json`                           | App metadata / suggested config                      |
+| `scrape_worker/scripts/setup-heroku.sh`            | Create app, set stack + buildpacks + defaults        |
 
 **One-time setup**
 

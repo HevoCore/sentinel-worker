@@ -291,10 +291,13 @@ def run_job_from_env(env: Optional[dict[str, str]] = None) -> int:
         coordinator_relayed = False
         rate_limited = bool(getattr(exc, "rate_limited", False))
         reason = getattr(exc, "reason", None)
-        # Expected business outcomes (no captions) are warnings; real errors get full tracebacks.
-        if reason == "no_captions":
+        blocked = bool(getattr(exc, "blocked", False)) or reason == "captcha_blocked"
+        providers = getattr(exc, "providers", None) or None
+        # Expected outcomes (no captions / captcha) are warnings; real errors get tracebacks.
+        if reason in {"no_captions", "captcha_blocked", "provider_unpaid"}:
             log.warning(
-                "Transcript unavailable (no captions) type=%s job_id=%s video_id=%s: %s",
+                "Transcript unavailable reason=%s type=%s job_id=%s video_id=%s: %s",
+                reason,
                 job_type,
                 job_id,
                 payload.get("video_id"),
@@ -314,22 +317,28 @@ def run_job_from_env(env: Optional[dict[str, str]] = None) -> int:
                 error=str(exc),
                 rate_limited=rate_limited,
                 reason=reason,
+                blocked=blocked,
+                providers=providers if isinstance(providers, dict) else None,
             )
             coordinator_relayed = True
+        fail_body = {
+            "worker_id": worker_id,
+            "ok": False,
+            "load_type": job_type or "unknown",
+            "job_id": job_id,
+            "error": str(exc),
+            "rate_limited": rate_limited,
+            "blocked": blocked,
+            "reason": reason,
+            "coordinator_relayed": coordinator_relayed,
+            "terminal": True,
+        }
+        if isinstance(providers, dict) and providers:
+            fail_body["providers"] = providers
         _post_callback(
             callback_url,
             callback_token,
-            {
-                "worker_id": worker_id,
-                "ok": False,
-                "load_type": job_type or "unknown",
-                "job_id": job_id,
-                "error": str(exc),
-                "rate_limited": rate_limited,
-                "reason": reason,
-                "coordinator_relayed": coordinator_relayed,
-                "terminal": True,
-            },
+            fail_body,
             fail=True,
         )
         return 1
