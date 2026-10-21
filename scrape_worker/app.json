@@ -62,8 +62,8 @@
       "required": true
     },
     "HEROKU_DYNO_SIZE": {
-      "description": "One-off dyno size",
-      "value": "standard-1x"
+      "description": "One-off dyno size (must match app tier; Basic apps cannot spawn standard-1x)",
+      "value": "basic"
     },
     "INTERNAL_CALLBACK_TOKEN": {
       "description": "Bearer for job→middleman callbacks (defaults to WORKER_SHARED_TOKEN)",
@@ -100,7 +100,7 @@
   "formation": {
     "web": {
       "quantity": 1,
-      "size": "standard-1x"
+      "size": "basic"
     }
   },
   "scripts": {

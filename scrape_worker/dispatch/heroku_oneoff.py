@@ -22,7 +22,7 @@ def _heroku_app_name() -> str:
 
 
 def _dyno_size() -> str:
-    return (os.environ.get("HEROKU_DYNO_SIZE") or "standard-1x").strip()
+    return (os.environ.get("HEROKU_DYNO_SIZE") or "basic").strip()
 
 
 def heroku_configured() -> bool:
